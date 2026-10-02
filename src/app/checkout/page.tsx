@@ -231,7 +231,7 @@ window.location.href = "/orders";
                   value={formData.firstName}
                   onChange={handleChange}
                   required
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
                 />
               </div>
 
@@ -249,7 +249,7 @@ window.location.href = "/orders";
                   value={formData.lastName}
                   onChange={handleChange}
                   required
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
                 />
               </div>
 
@@ -268,7 +268,7 @@ window.location.href = "/orders";
                   value={formData.email}
                   onChange={handleChange}
                   required
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none placeholder:text-slate-400"
                 />
               </div>
 
@@ -287,7 +287,7 @@ window.location.href = "/orders";
                   value={formData.phone}
                   onChange={handleChange}
                   required
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
                 />
               </div>
 
@@ -305,7 +305,7 @@ window.location.href = "/orders";
                   value={formData.address}
                   onChange={handleChange}
                   required
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
                 />
               </div>
 
@@ -323,7 +323,7 @@ window.location.href = "/orders";
                   value={formData.city}
                   onChange={handleChange}
                   required
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
                 />
               </div>
             </div>
