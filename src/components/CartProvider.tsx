@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import type { Product } from "@/lib/products";
+import { createClient } from "@/lib/supabase/client";
 
 export interface CartItem extends Product {
   quantity: number;
@@ -19,101 +20,244 @@ interface CartContextType {
   items: CartItem[];
   cartCount: number;
   subtotal: number;
-  addToCart: (product: Product, quantity?: number) => void;
-  increaseQuantity: (productId: string) => void;
-  decreaseQuantity: (productId: string) => void;
-  removeFromCart: (productId: string) => void;
-  clearCart: () => void;
+  addToCart: (product: Product, quantity?: number) => Promise<void>;
+  increaseQuantity: (productId: string) => Promise<void>;
+  decreaseQuantity: (productId: string) => Promise<void>;
+  removeFromCart: (productId: string) => Promise<void>;
+  clearCart: () => Promise<void>;
+  refreshCart: () => Promise<void>;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  useEffect(() => {
-    const storedCart = localStorage.getItem("nova-cart");
+  const supabase = createClient();
 
-    if (storedCart) {
-      try {
-        setItems(JSON.parse(storedCart));
-      } catch {
-        localStorage.removeItem("nova-cart");
+  // ----------------------------------------
+  // Get logged-in user
+  // ----------------------------------------
+  useEffect(() => {
+    const getUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      setUserId(user?.id ?? null);
+    };
+
+    getUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUserId(session?.user?.id ?? null);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // ----------------------------------------
+  // Load cart from Supabase
+  // ----------------------------------------
+  const refreshCart = async () => {
+    if (!userId) {
+      setItems([]);
+      setIsLoaded(true);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("cart_items")
+      .select(
+        `
+        id,
+        quantity,
+        product_id,
+        products (
+          id,
+          name,
+          description,
+          price,
+          image,
+          category
+        )
+      `
+      )
+      .eq("user_id", userId);
+
+    if (error) {
+      console.error("Error loading cart:", error);
+      return;
+    }
+
+    const cartItems: CartItem[] = (data ?? [])
+      .filter((item) => item.products)
+      .map((item) => {
+        const product = item.products as unknown as Product;
+
+        return {
+          ...product,
+          quantity: item.quantity,
+        };
+      });
+
+    setItems(cartItems);
+    setIsLoaded(true);
+  };
+
+  // ----------------------------------------
+  // Load cart whenever user changes
+  // ----------------------------------------
+  useEffect(() => {
+    if (userId !== null) {
+      refreshCart();
+    } else {
+      setItems([]);
+      setIsLoaded(true);
+    }
+  }, [userId]);
+
+  // ----------------------------------------
+  // Add to cart
+  // ----------------------------------------
+  const addToCart = async (product: Product, quantity = 1) => {
+    if (!userId) {
+      alert("Please sign in before adding items to your cart.");
+      return;
+    }
+
+    const existingItem = items.find((item) => item.id === product.id);
+
+    if (existingItem) {
+      const newQuantity = existingItem.quantity + quantity;
+
+      const { error } = await supabase
+        .from("cart_items")
+        .update({
+          quantity: newQuantity,
+        })
+        .eq("user_id", userId)
+        .eq("product_id", product.id);
+
+      if (error) {
+        console.error("Error updating cart:", error);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from("cart_items").insert({
+        user_id: userId,
+        product_id: product.id,
+        quantity,
+      });
+
+      if (error) {
+        console.error("Error adding to cart:", error);
+        return;
       }
     }
 
-    setIsLoaded(true);
-  }, []);
-
-  useEffect(() => {
-    if (!isLoaded) return;
-
-    localStorage.setItem("nova-cart", JSON.stringify(items));
-  }, [items, isLoaded]);
-
-  const addToCart = (product: Product, quantity = 1) => {
-    setItems((currentItems) => {
-      const existingItem = currentItems.find(
-        (item) => item.id === product.id
-      );
-
-      if (existingItem) {
-        return currentItems.map((item) =>
-          item.id === product.id
-            ? {
-                ...item,
-                quantity: item.quantity + quantity,
-              }
-            : item
-        );
-      }
-
-      return [
-        ...currentItems,
-        {
-          ...product,
-          quantity,
-        },
-      ];
-    });
+    await refreshCart();
   };
 
-  const increaseQuantity = (productId: string) => {
-    setItems((currentItems) =>
-      currentItems.map((item) =>
-        item.id === productId
-          ? {
-              ...item,
-              quantity: item.quantity + 1,
-            }
-          : item
-      )
-    );
+  // ----------------------------------------
+  // Increase quantity
+  // ----------------------------------------
+  const increaseQuantity = async (productId: string) => {
+    if (!userId) return;
+
+    const item = items.find((item) => item.id === productId);
+
+    if (!item) return;
+
+    const { error } = await supabase
+      .from("cart_items")
+      .update({
+        quantity: item.quantity + 1,
+      })
+      .eq("user_id", userId)
+      .eq("product_id", productId);
+
+    if (error) {
+      console.error("Error increasing quantity:", error);
+      return;
+    }
+
+    await refreshCart();
   };
 
-  const decreaseQuantity = (productId: string) => {
-    setItems((currentItems) =>
-      currentItems
-        .map((item) =>
-          item.id === productId
-            ? {
-                ...item,
-                quantity: item.quantity - 1,
-              }
-            : item
-        )
-        .filter((item) => item.quantity > 0)
-    );
+  // ----------------------------------------
+  // Decrease quantity
+  // ----------------------------------------
+  const decreaseQuantity = async (productId: string) => {
+    if (!userId) return;
+
+    const item = items.find((item) => item.id === productId);
+
+    if (!item) return;
+
+    if (item.quantity === 1) {
+      await removeFromCart(productId);
+      return;
+    }
+
+    const { error } = await supabase
+      .from("cart_items")
+      .update({
+        quantity: item.quantity - 1,
+      })
+      .eq("user_id", userId)
+      .eq("product_id", productId);
+
+    if (error) {
+      console.error("Error decreasing quantity:", error);
+      return;
+    }
+
+    await refreshCart();
   };
 
-  const removeFromCart = (productId: string) => {
-    setItems((currentItems) =>
-      currentItems.filter((item) => item.id !== productId)
-    );
+  // ----------------------------------------
+  // Remove item
+  // ----------------------------------------
+  const removeFromCart = async (productId: string) => {
+    if (!userId) return;
+
+    const { error } = await supabase
+      .from("cart_items")
+      .delete()
+      .eq("user_id", userId)
+      .eq("product_id", productId);
+
+    if (error) {
+      console.error("Error removing item:", error);
+      return;
+    }
+
+    await refreshCart();
   };
 
-  const clearCart = () => {
+  // ----------------------------------------
+  // Clear cart
+  // ----------------------------------------
+  const clearCart = async () => {
+    if (!userId) return;
+
+    const { error } = await supabase
+      .from("cart_items")
+      .delete()
+      .eq("user_id", userId);
+
+    if (error) {
+      console.error("Error clearing cart:", error);
+      return;
+    }
+
     setItems([]);
   };
 
@@ -123,11 +267,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   );
 
   const subtotal = useMemo(
-    () =>
-      items.reduce(
-        (total, item) => total + item.price * item.quantity,
-        0
-      ),
+    () => items.reduce((total, item) => total + item.price * item.quantity, 0),
     [items]
   );
 
@@ -142,6 +282,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
         decreaseQuantity,
         removeFromCart,
         clearCart,
+        refreshCart,
       }}
     >
       {children}
