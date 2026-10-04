@@ -1,5 +1,7 @@
+
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { sendOrderConfirmationEmail } from "@/lib/mailgun";
 
 interface OrderItemInput {
@@ -19,46 +21,86 @@ interface OrderRequest {
 
 export async function POST(request: Request) {
   try {
+    // Server client for the normal web session
     const supabase = await createClient();
 
-let user = null;
+    // Database client.
+    // For mobile requests, this will be replaced with a client
+    // authenticated using the mobile user's access token.
+    let db = supabase;
 
-// Check for mobile Authorization header
-const authHeader = request.headers.get("authorization");
+    let user = null;
 
-if (authHeader?.startsWith("Bearer ")) {
-  const accessToken = authHeader.replace("Bearer ", "");
+    // ---------------------------------------------------------
+    // 1. Check for mobile Authorization header
+    // ---------------------------------------------------------
 
-  const {
-    data: { user: mobileUser },
-    error: mobileUserError,
-  } = await supabase.auth.getUser(accessToken);
+    const authHeader = request.headers.get("authorization");
 
-  if (!mobileUserError && mobileUser) {
-    user = mobileUser;
-  }
-}
+    if (authHeader?.startsWith("Bearer ")) {
+      const accessToken = authHeader.replace("Bearer ", "");
 
-// If there is no mobile token, try the normal web session
-if (!user) {
-  const {
-    data: { user: webUser },
-    error: webUserError,
-  } = await supabase.auth.getUser();
+      // Create a Supabase client that uses the mobile user's
+      // access token for all database requests.
+      const mobileSupabase = createSupabaseClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+        {
+          global: {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          },
+        }
+      );
 
-  if (!webUserError && webUser) {
-    user = webUser;
-  }
-}
+      // Verify the mobile access token
+      const {
+        data: { user: mobileUser },
+        error: mobileUserError,
+      } = await mobileSupabase.auth.getUser();
 
-if (!user) {
-  return NextResponse.json(
-    {
-      error: "You must be signed in to place an order.",
-    },
-    { status: 401 }
-  );
-}
+      if (!mobileUserError && mobileUser) {
+        user = mobileUser;
+
+        // Use the authenticated mobile client for all
+        // subsequent database operations.
+        db = mobileSupabase;
+      }
+    }
+
+    // ---------------------------------------------------------
+    // 2. If no mobile user, try normal web session
+    // ---------------------------------------------------------
+
+    if (!user) {
+      const {
+        data: { user: webUser },
+        error: webUserError,
+      } = await supabase.auth.getUser();
+
+      if (!webUserError && webUser) {
+        user = webUser;
+        db = supabase;
+      }
+    }
+
+    // ---------------------------------------------------------
+    // 3. Reject unauthenticated users
+    // ---------------------------------------------------------
+
+    if (!user) {
+      return NextResponse.json(
+        {
+          error: "You must be signed in to place an order.",
+        },
+        { status: 401 }
+      );
+    }
+
+    // ---------------------------------------------------------
+    // 4. Read request body
+    // ---------------------------------------------------------
 
     const body: OrderRequest = await request.json();
 
@@ -71,6 +113,10 @@ if (!user) {
       city,
       items,
     } = body;
+
+    // ---------------------------------------------------------
+    // 5. Validate customer information
+    // ---------------------------------------------------------
 
     if (
       !firstName ||
@@ -88,6 +134,10 @@ if (!user) {
       );
     }
 
+    // ---------------------------------------------------------
+    // 6. Validate cart
+    // ---------------------------------------------------------
+
     if (!items || items.length === 0) {
       return NextResponse.json(
         {
@@ -97,32 +147,51 @@ if (!user) {
       );
     }
 
+    // ---------------------------------------------------------
+    // 7. Get products from database
+    // ---------------------------------------------------------
+
     const productIds = items.map((item) => item.productId);
 
-    const { data: products, error: productsError } = await supabase
+    const {
+      data: products,
+      error: productsError,
+    } = await db
       .from("products")
       .select("id, price")
       .in("id", productIds);
 
-  if (productsError || !products) {
-  console.error("Product lookup error:", productsError);
+    if (productsError || !products) {
+      console.error(
+        "Product lookup error:",
+        productsError
+      );
 
-  return NextResponse.json(
-    {
-      error: productsError?.message || "Unable to verify products.",
-    },
-    { status: 500 }
-  );
-}
+      return NextResponse.json(
+        {
+          error:
+            productsError?.message ||
+            "Unable to verify products.",
+          details: productsError,
+        },
+        { status: 500 }
+      );
+    }
 
+    // Make sure every requested product still exists
     if (products.length !== items.length) {
       return NextResponse.json(
         {
-          error: "One or more products are no longer available.",
+          error:
+            "One or more products are no longer available.",
         },
         { status: 400 }
       );
     }
+
+    // ---------------------------------------------------------
+    // 8. Calculate total on the server
+    // ---------------------------------------------------------
 
     let total = 0;
 
@@ -137,7 +206,10 @@ if (!user) {
 
       const quantity = Number(item.quantity);
 
-      if (!Number.isInteger(quantity) || quantity <= 0) {
+      if (
+        !Number.isInteger(quantity) ||
+        quantity <= 0
+      ) {
         throw new Error("Invalid quantity");
       }
 
@@ -152,7 +224,14 @@ if (!user) {
       };
     });
 
-    const { data: order, error: orderError } = await supabase
+    // ---------------------------------------------------------
+    // 9. Create order
+    // ---------------------------------------------------------
+
+    const {
+      data: order,
+      error: orderError,
+    } = await db
       .from("orders")
       .insert({
         user_id: user.id,
@@ -167,69 +246,107 @@ if (!user) {
       .select("id, total, status, created_at")
       .single();
 
-if (orderError || !order) {
-  console.error("Order creation error:", orderError);
+    if (orderError || !order) {
+      console.error(
+        "Order creation error:",
+        orderError
+      );
 
-  return NextResponse.json(
-    {
-      error: orderError?.message || "Unable to create your order.",
-      details: orderError,
-    },
-    { status: 500 }
-  );
-}
+      return NextResponse.json(
+        {
+          error:
+            orderError?.message ||
+            "Unable to create your order.",
+          details: orderError,
+        },
+        { status: 500 }
+      );
+    }
 
-    const itemsWithOrderId = orderItems.map((item) => ({
-      ...item,
-      order_id: order.id,
-    }));
+    // ---------------------------------------------------------
+    // 10. Create order items
+    // ---------------------------------------------------------
 
-    const { error: itemsError } = await supabase
+    const itemsWithOrderId = orderItems.map(
+      (item) => ({
+        ...item,
+        order_id: order.id,
+      })
+    );
+
+    const {
+      error: itemsError,
+    } = await db
       .from("order_items")
       .insert(itemsWithOrderId);
 
     if (itemsError) {
-      console.error("Order items creation error:", itemsError);
+      console.error(
+        "Order items creation error:",
+        itemsError
+      );
 
-      await supabase
+      // Remove the order if order items could not be saved
+      await db
         .from("orders")
         .delete()
         .eq("id", order.id);
 
       return NextResponse.json(
         {
-          error: "Unable to save order items.",
+          error:
+            itemsError.message ||
+            "Unable to save order items.",
+          details: itemsError,
         },
         { status: 500 }
       );
     }
 
-   try {
-  await sendOrderConfirmationEmail({
-    to: email,
-    firstName,
-    orderId: order.id,
-    total: Number(order.total),
-  });
-} catch (emailError) {
-  console.error("Confirmation email error:", emailError);
-}
+    // ---------------------------------------------------------
+    // 11. Send confirmation email
+    // ---------------------------------------------------------
 
-return NextResponse.json(
-  {
-    message: "Order placed successfully.",
-    order,
-  },
-  { status: 201 }
-);
-  } catch (error) {
-    console.error("Unexpected order error:", error);
+    try {
+      await sendOrderConfirmationEmail({
+        to: email,
+        firstName,
+        orderId: order.id,
+        total: Number(order.total),
+      });
+    } catch (emailError) {
+      // Email failure should NOT cancel a successfully
+      // created order.
+      console.error(
+        "Confirmation email error:",
+        emailError
+      );
+    }
+
+    // ---------------------------------------------------------
+    // 12. Return successful response
+    // ---------------------------------------------------------
 
     return NextResponse.json(
       {
-        error: "Something went wrong while placing your order.",
+        message: "Order placed successfully.",
+        order,
+      },
+      { status: 201 }
+    );
+  } catch (error) {
+    console.error(
+      "Unexpected order error:",
+      error
+    );
+
+    return NextResponse.json(
+      {
+        error:
+          "Something went wrong while placing your order.",
       },
       { status: 500 }
     );
   }
 }
+
