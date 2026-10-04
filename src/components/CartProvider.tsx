@@ -6,6 +6,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useCallback,
   type ReactNode,
 } from "react";
 
@@ -65,7 +66,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   // ----------------------------------------
   // Load cart from Supabase
   // ----------------------------------------
-  const refreshCart = async () => {
+  const refreshCart = useCallback(async () => {
     if (!userId) {
       setItems([]);
       setIsLoaded(true);
@@ -109,7 +110,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
     setItems(cartItems);
     setIsLoaded(true);
-  };
+  }, [userId]);
 
   // ----------------------------------------
   // Load cart whenever user changes
@@ -121,7 +122,43 @@ export function CartProvider({ children }: { children: ReactNode }) {
       setItems([]);
       setIsLoaded(true);
     }
-  }, [userId]);
+  }, [userId, refreshCart]);
+
+  // ----------------------------------------
+  // Realtime cart synchronization
+  // ----------------------------------------
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    const channel = supabase
+      .channel(`web-cart-${userId}-${Date.now()}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "cart_items",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          console.log(
+            "Web cart realtime event:",
+            payload.eventType
+          );
+
+          refreshCart();
+        }
+      )
+      .subscribe((status) => {
+        console.log("Web cart realtime status:", status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId, refreshCart]);
 
   // ----------------------------------------
   // Add to cart
@@ -132,7 +169,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const existingItem = items.find((item) => item.id === product.id);
+    const existingItem = items.find(
+      (item) => item.id === product.id
+    );
 
     if (existingItem) {
       const newQuantity = existingItem.quantity + quantity;
@@ -150,11 +189,13 @@ export function CartProvider({ children }: { children: ReactNode }) {
         return;
       }
     } else {
-      const { error } = await supabase.from("cart_items").insert({
-        user_id: userId,
-        product_id: product.id,
-        quantity,
-      });
+      const { error } = await supabase
+        .from("cart_items")
+        .insert({
+          user_id: userId,
+          product_id: product.id,
+          quantity,
+        });
 
       if (error) {
         console.error("Error adding to cart:", error);
@@ -171,7 +212,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const increaseQuantity = async (productId: string) => {
     if (!userId) return;
 
-    const item = items.find((item) => item.id === productId);
+    const item = items.find(
+      (item) => item.id === productId
+    );
 
     if (!item) return;
 
@@ -197,7 +240,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const decreaseQuantity = async (productId: string) => {
     if (!userId) return;
 
-    const item = items.find((item) => item.id === productId);
+    const item = items.find(
+      (item) => item.id === productId
+    );
 
     if (!item) return;
 
@@ -262,12 +307,21 @@ export function CartProvider({ children }: { children: ReactNode }) {
   };
 
   const cartCount = useMemo(
-    () => items.reduce((total, item) => total + item.quantity, 0),
+    () =>
+      items.reduce(
+        (total, item) => total + item.quantity,
+        0
+      ),
     [items]
   );
 
   const subtotal = useMemo(
-    () => items.reduce((total, item) => total + item.price * item.quantity, 0),
+    () =>
+      items.reduce(
+        (total, item) =>
+          total + item.price * item.quantity,
+        0
+      ),
     [items]
   );
 

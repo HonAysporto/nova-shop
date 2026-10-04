@@ -21,19 +21,44 @@ export async function POST(request: Request) {
   try {
     const supabase = await createClient();
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+let user = null;
 
-    if (userError || !user) {
-      return NextResponse.json(
-        {
-          error: "You must be signed in to place an order.",
-        },
-        { status: 401 }
-      );
-    }
+// Check for mobile Authorization header
+const authHeader = request.headers.get("authorization");
+
+if (authHeader?.startsWith("Bearer ")) {
+  const accessToken = authHeader.replace("Bearer ", "");
+
+  const {
+    data: { user: mobileUser },
+    error: mobileUserError,
+  } = await supabase.auth.getUser(accessToken);
+
+  if (!mobileUserError && mobileUser) {
+    user = mobileUser;
+  }
+}
+
+// If there is no mobile token, try the normal web session
+if (!user) {
+  const {
+    data: { user: webUser },
+    error: webUserError,
+  } = await supabase.auth.getUser();
+
+  if (!webUserError && webUser) {
+    user = webUser;
+  }
+}
+
+if (!user) {
+  return NextResponse.json(
+    {
+      error: "You must be signed in to place an order.",
+    },
+    { status: 401 }
+  );
+}
 
     const body: OrderRequest = await request.json();
 
