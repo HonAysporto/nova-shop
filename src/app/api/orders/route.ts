@@ -167,16 +167,17 @@ if (!user) {
       .select("id, total, status, created_at")
       .single();
 
-    if (orderError || !order) {
-      console.error("Order creation error:", orderError);
+if (orderError || !order) {
+  console.error("Order creation error:", orderError);
 
-      return NextResponse.json(
-        {
-          error: "Unable to create your order.",
-        },
-        { status: 500 }
-      );
-    }
+  return NextResponse.json(
+    {
+      error: orderError?.message || "Unable to create your order.",
+      details: orderError,
+    },
+    { status: 500 }
+  );
+}
 
     const itemsWithOrderId = orderItems.map((item) => ({
       ...item,
